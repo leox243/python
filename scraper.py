@@ -221,6 +221,7 @@ def _build_tender(rec: dict, detail: dict, keyword: str) -> dict:
     notice_date = _clean_date(
         detail.get("招標資料:公告日", "")
         or detail.get("公告資料:公告日", "")
+        or rec.get("_basic_notice_date", "")
     )
     # rec.date 是 readPublish 的抓取日期，非公告日
     # 只有 detail 有資料時才當 fallback（detail_pending 時留空，避免填入錯誤日期）
@@ -231,32 +232,37 @@ def _build_tender(rec: dict, detail: dict, keyword: str) -> dict:
             if dt:
                 notice_date = _to_minguo(dt)
 
-    deadline  = _clean_date(detail.get("領投開標:截止投標", "") or detail.get("截止投標", ""))
+    deadline  = _clean_date(
+        detail.get("領投開標:截止投標", "")
+        or detail.get("截止投標", "")
+        or rec.get("_basic_deadline", "")
+    )
     open_date = _clean_date(detail.get("領投開標:開標時間", ""))
 
     # detail_url 優先順序：
-    # 1. 官方 PCC 連結（pkPmsMain 可用時）
-    # 2. pcc.g0v.ronny.tw 公開查詢（fallback，detail_pending 時）
+    # 1. openfun.app detail 的官方 PCC URL（pkPmsMain 可用）
+    # 2. PCC indexTenderBasic 查到的官方 URL（pkPmsMain 可用）
+    # 3. querytenderDisplayAlt fallback（filename 格式）
     pcc_pk = detail.get("pkPmsMain", "")
     if not pcc_pk:
-        # openfun.app detail.url 有時含 pkPmsMain 參數
         m = re.search(r"pkPmsMain=([A-Za-z0-9+/=]+)", detail.get("url", ""))
         if m:
             pcc_pk = m.group(1)
+    if not pcc_pk:
+        pcc_pk = rec.get("_basic_pk", "")
 
     if pcc_pk:
         detail_url = f"{PCC_DETAIL_BASE}?pkPmsMain={pcc_pk}"
     else:
-        # 尚無 pkPmsMain（openfun.app 尚未更新）→ 官方 PCC 顯示頁 fallback
         detail_url = (
             rec.get("_pcc_detail_url", "")
             or (f"{PCC_DISPLAY_BASE}?category=TC&fnCategoryDate={filename}" if filename else "")
         )
 
-    # 預算：detail 有就用；沒有則用 readPublish summary 的金額級距
+    # 預算：detail 有就用；PCC basic 次之；readPublish 金額級距最後
     budget = _clean_budget(detail.get("採購資料:預算金額", ""))
     if not budget:
-        budget = rec.get("_budget_range", "")
+        budget = rec.get("_basic_budget", "") or rec.get("_budget_range", "")
 
     notes_raw = detail.get("其他:附加說明", "") or ""
     notes = notes_raw[:200]
@@ -375,6 +381,133 @@ def _fetch_pcc_direct(pcc_session: requests.Session, dt: datetime) -> Optional[l
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# PCC indexTenderBasic 搜尋（直接取公告日期/截止投標/預算/pkPmsMain）
+# ─────────────────────────────────────────────────────────────────────────────
+
+PCC_BASIC_URL   = "https://web.pcc.gov.tw/prkms/tender/common/basic/indexTenderBasic"
+PCC_BASIC_QUERY = "https://web.pcc.gov.tw/prkms/tender/common/basic/readTenderBasic"
+
+# 嘗試順序：招標公告 → 公開徵求 → 政府採購預告
+_BASIC_TENDER_TYPES = ["TENDER_DECLARATION", "SEARCH_APPEAL", "PREDICT"]
+
+
+def _init_basic_session(pcc_session: requests.Session) -> None:
+    """模擬使用者開啟 PCC 查詢頁面，取得 Session cookie。"""
+    try:
+        # 先造訪首頁，再到查詢頁，模擬正常瀏覽流程
+        pcc_session.headers.update({"Referer": "https://web.pcc.gov.tw/"})
+        pcc_session.get("https://web.pcc.gov.tw/", timeout=10)
+        _sleep(1.0, 2.5)
+        pcc_session.headers.update({"Referer": "https://web.pcc.gov.tw/"})
+        pcc_session.get(PCC_BASIC_URL, timeout=10)
+        _sleep(0.5, 1.5)
+    except Exception:
+        pass
+
+
+def _parse_basic_row(row) -> Optional[dict]:
+    """解析 tb_01 表格的一列，回傳 dict 或 None。"""
+    cells = row.find_all("td")
+    if len(cells) < 9:
+        return None
+    # cells[2]：標案案號 + 標案名稱（名稱藏在 JS 字串中）
+    name_cell = cells[2]
+    case_no_text = name_cell.get_text(separator="\n").split("\n")[0].strip()
+    name_match = re.search(r'pageCode2Img\("([^"]+)"\)', str(name_cell))
+    tender_name = name_match.group(1) if name_match else ""
+    # pkPmsMain 在 href ?pk=VALUE
+    pk_match = re.search(r'\?pk=([A-Za-z0-9+/=]+)', str(name_cell))
+    pk = pk_match.group(1) if pk_match else ""
+    return {
+        "org_name":    cells[1].get_text(strip=True),
+        "case_no":     case_no_text,
+        "name":        tender_name,
+        "pk":          pk,
+        "notice_date": cells[6].get_text(strip=True),
+        "deadline":    cells[7].get_text(strip=True),
+        "budget":      cells[8].get_text(strip=True),
+        "detail_url":  f"{PCC_DETAIL_BASE}?pkPmsMain={pk}" if pk else "",
+    }
+
+
+def _fetch_basic_detail(
+    pcc_session: requests.Session,
+    tender_name: str,
+    case_no: str = "",
+    org_name: str = "",
+) -> Optional[dict]:
+    """
+    用標案名稱到 PCC indexTenderBasic 查詢，回傳含公告日期/截止/預算/pkPmsMain 的 dict。
+
+    搜尋策略：
+    - dateType=isNow（當日公告），配合每日執行；
+    - 依序嘗試 招標公告 → 公開徵求 → 政府採購預告。
+    - 比對優先順序：案號完全符合 > 標案名稱包含關係。
+    - 搜尋間隔 1~2 秒，避免被限流。
+    """
+    # 名稱正規化：去掉多餘空格（例如 "115 年" → "115年"）
+    search_name = re.sub(r"\s+", "", tender_name).strip() if tender_name else ""
+
+    for tender_type in _BASIC_TENDER_TYPES:
+        # isNow（當日）→ isSpdt（等標期內，捕捉昨天以前的更正公告）
+        for date_type in ("isNow", "isSpdt"):
+            try:
+                # 模擬人類：每次查詢前有自然停頓
+                _sleep(2.0, 4.0)
+                pcc_session.headers.update({
+                    "Referer": PCC_BASIC_URL,
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Origin": "https://web.pcc.gov.tw",
+                })
+                r = pcc_session.post(
+                    PCC_BASIC_QUERY,
+                    data={
+                        "pageSize": "20",
+                        "firstSearch": "false",
+                        "searchType": "basic",
+                        "isBinding": "N",
+                        "isLogIn": "N",
+                        "tenderName": search_name,
+                        "tenderType": tender_type,
+                        "dateType": date_type,
+                    },
+                    timeout=15,
+                )
+            except Exception as e:
+                logger.debug(f"_fetch_basic_detail POST error ({tender_type}/{date_type}): {e}")
+                continue
+
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(r.text, "html.parser")
+            tbl  = soup.find("table", class_="tb_01")
+            if not tbl:
+                continue
+
+            candidates = []
+            for row in tbl.find_all("tr")[1:]:
+                parsed = _parse_basic_row(row)
+                if not parsed:
+                    continue
+                if parsed["name"] == "" and parsed["case_no"] == "":
+                    continue
+                # 比對：案號完全符合（最優先）
+                if case_no and parsed["case_no"] == case_no:
+                    logger.debug(f"    PCC basic match (case_no/{date_type}): {parsed['name']}")
+                    return parsed
+                # 比對：標案名稱（去空格後）相互包含
+                norm_parsed = re.sub(r"\s+", "", parsed["name"])
+                if search_name and (search_name in norm_parsed or norm_parsed in search_name):
+                    candidates.append(parsed)
+
+            if candidates:
+                best = max(candidates, key=lambda x: len(x["name"]))
+                logger.debug(f"    PCC basic match (name/{date_type}): {best['name']}")
+                return best
+
+    return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 生產模式：雙模式 scrape（直連 PCC 優先，openfun.app 備用）
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -404,6 +537,7 @@ def scrape_all_keywords(
 
     session     = _make_session()      # openfun.app
     pcc_session = _make_pcc_session()  # 直連 PCC
+    _init_basic_session(pcc_session)   # 取得 indexTenderBasic session cookie
     today       = datetime.now()
     new_tenders: List[dict] = []
     seen_pks: set = set()
@@ -454,14 +588,31 @@ def scrape_all_keywords(
             if filename and (filename in seen_pks or is_pk_known(filename, project_id)):
                 continue
 
-            # ── 抓取詳細資料（openfun.app，可能為空）──────────────────
+            # ── 抓取詳細資料（三層 fallback）──────────────────────────
+            # 1. openfun.app detail（最完整）
+            # 2. PCC indexTenderBasic（公告日/截止/預算/pkPmsMain，即時）
+            # 3. 僅用 readPublish 基本資訊（detail_pending=True）
             detail = {}
             detail_pending = False
+            logger.info(f"  [{matched_kw}] {org_name[:20]} – {title[:40]}")
+
             if fetch_detail and rec.get("tender_api_url"):
-                logger.info(f"  [{matched_kw}] {org_name[:20]} – {title[:40]}")
                 detail = _get_detail(session, rec["tender_api_url"])
-                if not detail:
-                    logger.info(f"    (openfun.app 尚未更新，使用基本資訊)")
+
+            if not detail:
+                # ── 2. 直接查 PCC indexTenderBasic ────────────────────
+                case_no  = rec.get("job_number", "")
+                basic    = _fetch_basic_detail(pcc_session, title, case_no, org_name)
+                if basic:
+                    logger.info(f"    (PCC basic 補齊：{basic['notice_date']} / {basic['deadline']} / {basic['budget']})")
+                    # 將 basic 結果注入 rec，讓 _build_tender 可以使用
+                    rec["_basic_notice_date"] = basic["notice_date"]
+                    rec["_basic_deadline"]    = basic["deadline"]
+                    rec["_basic_budget"]      = basic["budget"]
+                    rec["_basic_pk"]          = basic["pk"]
+                    rec["_basic_detail_url"]  = basic["detail_url"]
+                else:
+                    logger.info(f"    (PCC basic 查無資料，使用基本資訊)")
                     detail_pending = True
 
             # ── 組合 + 最終去重 ─────────────────────────────────────────
