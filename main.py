@@ -4,6 +4,7 @@
 用法：
   python main.py run          # 立即執行一次（抓取 + 儲存 + 通知）
   python main.py schedule     # 啟動排程（依 .env SCHEDULE_HOUR/MINUTE 每天執行）
+  python main.py web          # 啟動 Web UI（http://127.0.0.1:5050）
   python main.py test         # 測試爬蟲（抓第一頁，不寫入 DB，不發通知）
   python main.py list         # 列出 DB 中最近 20 筆標案
 """
@@ -44,8 +45,10 @@ def cmd_schedule() -> None:
 def cmd_test() -> None:
     """Quick test: scrape first keyword, print results, no DB write."""
     from config import settings
+    from database import init_db
     from scraper import scrape_keyword
 
+    init_db()  # ensure DB table exists (needed for dedup check)
     kw = settings.keyword_list[0] if settings.keyword_list else "資訊系統"
     logger.info(f"TEST MODE – keyword: '{kw}' (no DB write, no notifications)")
 
@@ -72,6 +75,19 @@ def cmd_test() -> None:
         )
     logger.info(f"{'='*60}")
     logger.info(f"共 {len(tenders)} 筆（最多顯示 20 筆）")
+
+
+def cmd_web() -> None:
+    """啟動 Web UI。"""
+    import sys
+    port = 5050
+    for arg in sys.argv[2:]:
+        if arg.startswith("--port="):
+            port = int(arg.split("=")[1])
+        elif arg == "--port" and sys.argv.index(arg) + 1 < len(sys.argv):
+            port = int(sys.argv[sys.argv.index(arg) + 1])
+    from web_app import start_web
+    start_web(host="127.0.0.1", port=port)
 
 
 def cmd_list() -> None:
@@ -108,6 +124,7 @@ def cmd_list() -> None:
 COMMANDS = {
     "run":      cmd_run,
     "schedule": cmd_schedule,
+    "web":      cmd_web,
     "test":     cmd_test,
     "list":     cmd_list,
 }

@@ -1,0 +1,193 @@
+{% extends "base.html" %}
+{% block page_title %}儀表板 – 標案通知系統{% endblock %}
+
+{% block page %}
+<div x-data="dashboardPage()" x-init="init()" class="flex-1 flex flex-col min-h-screen">
+
+  <!-- Top bar -->
+  <header class="bg-white border-b border-gray-200 px-8 py-4 flex items-center justify-between sticky top-0 z-10">
+    <h1 class="text-lg font-semibold text-gray-900">所有專案</h1>
+    <a href="/projects/new"
+       class="flex items-center gap-2 text-sm bg-brand-600 text-white rounded-lg px-4 py-2 hover:bg-brand-700 transition-colors">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+      </svg>
+      新增專案
+    </a>
+  </header>
+
+  <!-- Content -->
+  <main class="flex-1 px-8 py-6">
+
+    <!-- Loading skeleton -->
+    <div x-show="loading" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+      <template x-for="i in 3" :key="i">
+        <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 animate-pulse">
+          <div class="h-4 bg-gray-100 rounded w-1/2 mb-4"></div>
+          <div class="h-3 bg-gray-100 rounded w-full mb-2"></div>
+          <div class="h-3 bg-gray-100 rounded w-2/3"></div>
+        </div>
+      </template>
+    </div>
+
+    <!-- Empty state -->
+    <div x-show="!loading && projects.length === 0" class="flex flex-col items-center justify-center py-24">
+      <svg class="w-12 h-12 text-gray-200 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+          d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
+      </svg>
+      <p class="text-gray-400 mb-4">尚無專案，立即建立第一個！</p>
+      <a href="/projects/new"
+         class="text-sm bg-brand-600 text-white rounded-lg px-5 py-2 hover:bg-brand-700 transition-colors">
+        新增專案
+      </a>
+    </div>
+
+    <!-- Project cards -->
+    <div x-show="!loading && projects.length > 0"
+         class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+      <template x-for="p in projects" :key="p.id">
+        <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 flex flex-col hover:shadow-md transition-shadow">
+
+          <!-- Header -->
+          <div class="flex items-start justify-between mb-3">
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2 mb-1">
+                <h2 class="font-semibold text-gray-900 truncate" x-text="p.name"></h2>
+                <span :class="p.active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-400'"
+                      class="text-xs px-1.5 py-0.5 rounded-full flex-shrink-0"
+                      x-text="p.active ? '啟用' : '停用'"></span>
+              </div>
+              <!-- Keywords -->
+              <div class="flex flex-wrap gap-1">
+                <template x-for="kw in (p.keywords_list||[]).slice(0,4)" :key="kw">
+                  <span class="text-xs bg-brand-50 text-brand-700 border border-brand-200 rounded px-1.5 py-0.5"
+                        x-text="kw"></span>
+                </template>
+                <span x-show="(p.keywords_list||[]).length > 4" class="text-xs text-gray-400"
+                      x-text="'+' + ((p.keywords_list||[]).length - 4)"></span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Stats -->
+          <div class="grid grid-cols-3 gap-2 my-4">
+            <div class="text-center p-2 bg-gray-50 rounded-lg">
+              <p class="text-lg font-bold text-gray-900" x-text="p.total ?? 0"></p>
+              <p class="text-xs text-gray-400">累計</p>
+            </div>
+            <div class="text-center p-2 bg-green-50 rounded-lg">
+              <p class="text-lg font-bold text-green-700" x-text="p.today ?? 0"></p>
+              <p class="text-xs text-gray-400">今日</p>
+            </div>
+            <div class="text-center p-2 bg-yellow-50 rounded-lg">
+              <p class="text-lg font-bold text-yellow-700" x-text="p.unnotified ?? 0"></p>
+              <p class="text-xs text-gray-400">未通知</p>
+            </div>
+          </div>
+
+          <!-- Schedule & sheet -->
+          <div class="flex flex-col gap-1.5 text-xs text-gray-500 mb-4 flex-1">
+            <div class="flex items-center gap-1.5">
+              <svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                  d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+              </svg>
+              <span x-text="p.next_run_label"></span>
+              <span class="text-gray-300">·</span>
+              <span x-text="'回溯 ' + p.notify_days + ' 天'"></span>
+            </div>
+            <div x-show="p.sheet_url" class="flex items-center gap-1.5">
+              <svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                  d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+              </svg>
+              <a :href="p.sheet_url" target="_blank" class="text-brand-600 hover:underline">試算表</a>
+            </div>
+          </div>
+
+          <!-- Actions -->
+          <div class="flex items-center gap-2 pt-3 border-t border-gray-50">
+            <a :href="'/projects/' + p.id"
+               class="flex-1 text-center text-xs text-gray-600 border border-gray-200 rounded-lg px-3 py-1.5 hover:bg-gray-50 transition-colors">
+              查看標案
+            </a>
+            <a :href="'/projects/' + p.id + '/edit'"
+               class="text-xs text-gray-600 border border-gray-200 rounded-lg px-3 py-1.5 hover:bg-gray-50 transition-colors">
+              編輯
+            </a>
+            <button @click="runProject(p)" :disabled="p._running"
+              class="text-xs bg-brand-600 text-white rounded-lg px-3 py-1.5 hover:bg-brand-700 transition-colors disabled:opacity-60 flex items-center gap-1">
+              <svg x-show="p._running" class="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+              </svg>
+              <span x-text="p._running ? '執行中' : '執行'"></span>
+            </button>
+            <button @click="deleteProject(p)"
+              class="text-xs text-red-400 hover:text-red-600 border border-gray-200 hover:border-red-200 rounded-lg px-2 py-1.5 transition-colors">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                  d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+              </svg>
+            </button>
+          </div>
+
+        </div>
+      </template>
+    </div>
+
+  </main>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function dashboardPage() {
+  return {
+    projects: [],
+    loading: true,
+
+    async init() {
+      await this.loadProjects();
+    },
+
+    async loadProjects() {
+      this.loading = true;
+      try {
+        const list = await apiCall('GET', '/api/projects');
+        this.projects = list.map(p => ({ ...p, _running: false }));
+      } catch(e) {
+        toast('載入失敗：' + e.message, 'error');
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    async runProject(p) {
+      p._running = true;
+      try {
+        const res = await apiCall('POST', `/api/projects/${p.id}/run`);
+        toast(res.message, 'success');
+        setTimeout(() => this.loadProjects(), 60000);
+      } catch(e) {
+        toast('執行失敗：' + e.message, 'error');
+      } finally {
+        setTimeout(() => { p._running = false; }, 5000);
+      }
+    },
+
+    async deleteProject(p) {
+      if (!confirm(`確定刪除專案「${p.name}」？\n此操作將同時刪除該專案所有標案紀錄，無法復原。`)) return;
+      try {
+        await apiCall('DELETE', `/api/projects/${p.id}`);
+        toast('專案已刪除', 'success');
+        this.projects = this.projects.filter(x => x.id !== p.id);
+      } catch(e) {
+        toast('刪除失敗：' + e.message, 'error');
+      }
+    },
+  }
+}
+</script>
+{% endblock %}

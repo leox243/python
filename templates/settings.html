@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+{% block page_title %}全域設定 – 標案通知系統{% endblock %}
+
+{% block page %}
+<div x-data="settingsPage()" x-init="init()" class="flex-1 flex flex-col min-h-screen">
+
+  <!-- Top bar -->
+  <header class="bg-white border-b border-gray-200 px-8 py-4 flex items-center justify-between sticky top-0 z-10">
+    <h1 class="text-lg font-semibold text-gray-900">全域設定</h1>
+    <button @click="save()" :disabled="saving"
+      class="flex items-center gap-2 text-sm bg-brand-600 text-white rounded-lg px-4 py-2 hover:bg-brand-700 transition-colors disabled:opacity-60">
+      <svg x-show="saving" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+      </svg>
+      <span x-text="saving ? '儲存中…' : '儲存設定'"></span>
+    </button>
+  </header>
+
+  <!-- Content -->
+  <main class="flex-1 px-8 py-6 max-w-2xl">
+
+    <p class="text-sm text-gray-500 mb-6">
+      全域設定由所有專案共用，包含寄信帳號（SMTP）與 Google OAuth 憑證。<br>
+      各專案的關鍵字、收件人、試算表、排程請至
+      <a href="/" class="text-brand-600 hover:underline">專案設定</a> 管理。
+    </p>
+
+    <!-- SMTP -->
+    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-5">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-sm font-semibold text-gray-700">SMTP 發信設定</h2>
+        <span :class="settings.email_enabled ? 'text-green-600 bg-green-50' : 'text-gray-400 bg-gray-100'"
+              class="text-xs px-2 py-0.5 rounded-full"
+              x-text="settings.email_enabled ? '已設定' : '未設定'"></span>
+      </div>
+
+      <div class="grid grid-cols-2 gap-4 mb-4">
+        <div>
+          <label class="block text-xs font-medium text-gray-600 mb-1.5">SMTP 主機</label>
+          <input x-model="settings.smtp_host" type="text" placeholder="smtp.gmail.com"
+            class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-gray-600 mb-1.5">SMTP 埠號</label>
+          <input x-model.number="settings.smtp_port" type="number" placeholder="587"
+            class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+        </div>
+      </div>
+
+      <div class="mb-4">
+        <label class="block text-xs font-medium text-gray-600 mb-1.5">登入帳號（寄件者 Email）</label>
+        <input x-model="settings.smtp_user" type="email" placeholder="your@gmail.com"
+          class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+      </div>
+
+      <div class="mb-4">
+        <label class="block text-xs font-medium text-gray-600 mb-1.5">應用程式密碼</label>
+        <input x-model="settings.smtp_password" type="password" placeholder="Gmail App Password"
+          class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+        <p class="text-xs text-gray-400 mt-1">Gmail 請使用「應用程式密碼」，非帳號密碼</p>
+      </div>
+
+      <div>
+        <label class="block text-xs font-medium text-gray-600 mb-1.5">顯示寄件者名稱 / Email（選填）</label>
+        <input x-model="settings.email_from" type="text" placeholder="標案通知系統 <your@gmail.com>"
+          class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+      </div>
+    </div>
+
+    <!-- Google OAuth -->
+    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-5">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-sm font-semibold text-gray-700">Google OAuth 憑證</h2>
+        <span :class="settings.google_enabled ? 'text-green-600 bg-green-50' : 'text-gray-400 bg-gray-100'"
+              class="text-xs px-2 py-0.5 rounded-full"
+              x-text="settings.google_enabled ? '已設定' : '未設定'"></span>
+      </div>
+
+      <p class="text-xs text-gray-400 mb-4">
+        所有專案共用同一組 OAuth 憑證。各專案可指定不同的試算表 ID。<br>
+        尚未取得 refresh token？執行 <code class="bg-gray-100 px-1 rounded">python tools/get_google_token.py</code>
+      </p>
+
+      <div class="mb-4">
+        <label class="block text-xs font-medium text-gray-600 mb-1.5">Client ID</label>
+        <input x-model="settings.google_oauth_client_id" type="text" placeholder="123456789-xxx.apps.googleusercontent.com"
+          class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 font-mono text-xs">
+      </div>
+
+      <div class="mb-4">
+        <label class="block text-xs font-medium text-gray-600 mb-1.5">Client Secret</label>
+        <input x-model="settings.google_oauth_client_secret" type="password" placeholder="GOCSPX-..."
+          class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+      </div>
+
+      <div class="mb-4">
+        <label class="block text-xs font-medium text-gray-600 mb-1.5">Refresh Token</label>
+        <input x-model="settings.google_oauth_refresh_token" type="password" placeholder="1//0g..."
+          class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+      </div>
+
+      <div>
+        <label class="block text-xs font-medium text-gray-600 mb-1.5">預設工作表名稱（Sheet name）</label>
+        <input x-model="settings.google_sheet_name" type="text" placeholder="工作表1"
+          class="w-48 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+        <p class="text-xs text-gray-400 mt-1">所有專案寫入同一個 sheet name（通常不需改）</p>
+      </div>
+    </div>
+
+  </main>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function settingsPage() {
+  return {
+    settings: {},
+    saving: false,
+
+    async init() {
+      try {
+        this.settings = await apiCall('GET', '/api/settings');
+      } catch(e) {
+        toast('載入設定失敗', 'error');
+      }
+    },
+
+    async save() {
+      this.saving = true;
+      try {
+        await apiCall('POST', '/api/settings', this.settings);
+        toast('設定已儲存', 'success');
+      } catch(e) {
+        toast('儲存失敗：' + e.message, 'error');
+      } finally {
+        this.saving = false;
+      }
+    },
+  }
+}
+</script>
+{% endblock %}

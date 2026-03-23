@@ -4,9 +4,15 @@
 Google Sheets：每筆新標案新增一列
 Email：HTML 表格，列出所有新標案
 
-認證優先順序（同 SPIDER 專案）：
-  1. OAuth2 refresh token（.env GOOGLE_OAUTH_* 設定）
-  2. 無 Google 設定 → 跳過
+認證優先順序：
+  1. Service Account（service_account.json，永不過期，推薦）
+  2. OAuth2 refresh token（.env GOOGLE_OAUTH_* 設定，fallback）
+  3. 無 Google 設定 → 跳過
+
+多專案支援：
+  - notify(tenders, project) → 使用 project['sheet_id'] / project['email_to']
+  - append_to_sheet(tenders, sheet_id=None) → sheet_id 優先，fallback 到 settings
+  - send_email(tenders, recipients=None)  → recipients 優先，fallback 到 settings
 """
 from __future__ import annotations
 
@@ -14,7 +20,8 @@ import smtplib
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from typing import List
+from pathlib import Path
+from typing import List, Optional
 
 from loguru import logger
 
@@ -25,7 +32,7 @@ SHEET_HEADERS = [
     "關鍵字", "標案名稱", "機關名稱", "預算金額",
     "公告日期", "截止投標", "開標時間", "開標地點",
     "標的分類", "招標方式", "履約地點", "履約期限",
-    "聯絡人", "聯絡電話", "Email", "詳細連結",
+    "聯絡人", "聯絡電話", "Email", "詳細連結", "取得時間",
 ]
 
 SCOPES = [
@@ -38,8 +45,45 @@ SCOPES = [
 # Google Sheets
 # ─────────────────────────────────────────────────────────────────────────────
 
+_SA_PATH    = Path(__file__).parent / "service_account.json"
+_PCC_DETAIL = "https://web.pcc.gov.tw/tps/QueryTender/query/searchTenderDetail"
+
+
+_PCC_DISPLAY = "https://web.pcc.gov.tw/tenderDisplay/querytenderDisplayAlt.do"
+
+
+def _pcc_url(t: dict) -> str:
+    """回傳最佳標案連結（均為 web.pcc.gov.tw 官方域名）。
+
+    優先順序：
+    1. detail_url 已含官方 PCC 網址 → 直接用
+    2. pk 不含 '-'（base64 pkPmsMain）→ 組 searchTenderDetail URL
+    3. pk 含 '-'（filename 格式，detail_pending）→ 組 querytenderDisplayAlt URL
+    """
+    detail_url = t.get("detail_url", "")
+    if "web.pcc.gov.tw" in detail_url:
+        return detail_url
+    pk = t.get("pk", "")
+    if pk and "-" not in pk:
+        return f"{_PCC_DETAIL}?pkPmsMain={pk}"
+    if pk and "-" in pk:
+        return f"{_PCC_DISPLAY}?category=TC&fnCategoryDate={pk}"
+    return detail_url
+
+
 def _get_credentials():
-    """Build OAuth2 credentials from refresh token."""
+    """Build Google credentials.
+
+    優先使用 Service Account（永不過期），
+    fallback 到 OAuth2 refresh token。
+    """
+    if _SA_PATH.exists():
+        from google.oauth2.service_account import Credentials as SACredentials
+        logger.debug("Google auth: using Service Account")
+        return SACredentials.from_service_account_file(str(_SA_PATH), scopes=SCOPES)
+
+    # Fallback: OAuth2 refresh token
+    logger.debug("Google auth: using OAuth2 refresh token")
     from google.oauth2.credentials import Credentials
     return Credentials(
         token=None,
@@ -49,6 +93,13 @@ def _get_credentials():
         client_secret=settings.google_oauth_client_secret,
         scopes=SCOPES,
     )
+
+
+def _google_available() -> bool:
+    """Service Account 或 OAuth2 任一設定即可用。"""
+    if _SA_PATH.exists():
+        return True
+    return settings.google_enabled
 
 
 def _ensure_headers(service, spreadsheet_id: str, sheet_name: str) -> None:
@@ -84,23 +135,33 @@ def _tender_to_row(t: dict) -> list:
         t.get("contact", ""),
         t.get("phone", ""),
         t.get("email", ""),
-        t.get("detail_url", ""),
+        _pcc_url(t),
+        t.get("created_at", datetime.now().strftime("%Y-%m-%d %H:%M")),
     ]
 
 
-def append_to_sheet(tenders: List[dict]) -> bool:
-    """Append new tenders to Google Sheet. Returns True on success."""
-    if not settings.google_enabled:
+def append_to_sheet(tenders: List[dict], sheet_id: Optional[str] = None) -> bool:
+    """Append new tenders to Google Sheet. Returns True on success.
+
+    Args:
+        tenders: list of tender dicts
+        sheet_id: override sheet ID (uses settings.google_sheet_id if None)
+    """
+    if not _google_available():
         logger.debug("Google Sheets not configured, skipping")
         return False
     if not tenders:
         return True
 
+    sid = sheet_id or settings.google_sheet_id
+    if not sid:
+        logger.debug("No sheet_id configured, skipping Google Sheets")
+        return False
+
     try:
         from googleapiclient.discovery import build
         creds   = _get_credentials()
         service = build("sheets", "v4", credentials=creds)
-        sid     = settings.google_sheet_id
         sname   = settings.google_sheet_name
 
         _ensure_headers(service, sid, sname)
@@ -109,11 +170,11 @@ def append_to_sheet(tenders: List[dict]) -> bool:
         service.spreadsheets().values().append(
             spreadsheetId=sid,
             range=f"{sname}!A1",
-            valueInputOption="USER_ENTERED",
+            valueInputOption="RAW",   # RAW = no date/formula parsing; keeps 民國 dates as text
             insertDataOption="INSERT_ROWS",
             body={"values": rows},
         ).execute()
-        logger.info(f"Google Sheets: appended {len(rows)} row(s)")
+        logger.info(f"Google Sheets: appended {len(rows)} row(s) to sheet {sid[:20]}...")
         return True
     except Exception as e:
         logger.error(f"Google Sheets append failed: {e}")
@@ -142,7 +203,7 @@ _EMAIL_TEMPLATE = """\
 </head>
 <body>
 <h2>標案通知 – {count} 筆新標案</h2>
-<p>搜尋關鍵字：{keywords}　｜　通知時間：{ts}</p>
+<p>專案：{project_name}　｜　搜尋關鍵字：{keywords}　｜　通知時間：{ts}</p>
 <table>
 <thead>
 <tr>
@@ -179,17 +240,37 @@ _ROW_TEMPLATE = """\
 """
 
 
-def send_email(tenders: List[dict]) -> bool:
-    """Send HTML email with tender list. Returns True on success."""
+def send_email(
+    tenders: List[dict],
+    recipients: Optional[List[str]] = None,
+    project_name: str = "",
+    keywords_label: str = "",
+) -> bool:
+    """Send HTML email with tender list. Returns True on success.
+
+    Args:
+        tenders: list of tender dicts
+        recipients: override recipient list (uses settings.email_recipients if None)
+        project_name: display name in email subject/body
+        keywords_label: comma-separated keywords for display
+    """
     if not settings.email_enabled:
         logger.debug("Email not configured, skipping")
         return False
     if not tenders:
         return True
 
+    to_list = recipients or settings.email_recipients
+    if not to_list:
+        logger.debug("No email recipients configured, skipping")
+        return False
+
+    kw_label = keywords_label or settings.keywords
+    proj_label = project_name or "預設專案"
+
     rows_html = "".join(
         _ROW_TEMPLATE.format(
-            url=t.get("detail_url", ""),
+            url=_pcc_url(t),
             name=t.get("name", ""),
             org_name=t.get("org_name", ""),
             budget=t.get("budget", ""),
@@ -202,17 +283,18 @@ def send_email(tenders: List[dict]) -> bool:
 
     html_body = _EMAIL_TEMPLATE.format(
         count=len(tenders),
-        keywords=settings.keywords,
+        project_name=proj_label,
+        keywords=kw_label,
         ts=datetime.now().strftime("%Y-%m-%d %H:%M"),
         rows=rows_html,
     )
 
-    subject = f"【標案通知】{len(tenders)} 筆新標案 – {datetime.now().strftime('%Y/%m/%d')}"
+    subject = f"【標案通知】{proj_label} – {len(tenders)} 筆新標案 – {datetime.now().strftime('%Y/%m/%d')}"
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"]    = settings.email_from or settings.smtp_user
-    msg["To"]      = ", ".join(settings.email_recipients)
+    msg["To"]      = ", ".join(to_list)
     msg.attach(MIMEText(html_body, "html", "utf-8"))
 
     try:
@@ -222,10 +304,10 @@ def send_email(tenders: List[dict]) -> bool:
             smtp.login(settings.smtp_user, settings.smtp_password)
             smtp.sendmail(
                 settings.smtp_user,
-                settings.email_recipients,
+                to_list,
                 msg.as_bytes(),
             )
-        logger.info(f"Email sent to {settings.email_recipients}: {subject}")
+        logger.info(f"Email sent to {to_list}: {subject}")
         return True
     except Exception as e:
         logger.error(f"Email send failed: {e}")
@@ -236,12 +318,33 @@ def send_email(tenders: List[dict]) -> bool:
 # Combined
 # ─────────────────────────────────────────────────────────────────────────────
 
-def notify(tenders: List[dict]) -> None:
-    """Send all configured notifications for a list of new tenders."""
+def notify(tenders: List[dict], project: Optional[dict] = None) -> None:
+    """Send all configured notifications for a list of new tenders.
+
+    Args:
+        tenders: list of tender dicts
+        project: project dict with keys: name, keywords, email_to, sheet_id
+                 If None, falls back to global settings
+    """
     if not tenders:
         logger.info("No new tenders to notify")
         return
 
     logger.info(f"Sending notifications for {len(tenders)} tender(s) ...")
-    append_to_sheet(tenders)
-    send_email(tenders)
+
+    # Extract project-specific settings
+    sheet_id     = None
+    recipients   = None
+    project_name = ""
+    kw_label     = ""
+
+    if project:
+        sheet_id     = project.get("sheet_id") or None
+        email_to_str = project.get("email_to", "")
+        if email_to_str:
+            recipients = [e.strip() for e in email_to_str.split(",") if e.strip()]
+        project_name = project.get("name", "")
+        kw_label     = project.get("keywords", "")
+
+    append_to_sheet(tenders, sheet_id=sheet_id)
+    send_email(tenders, recipients=recipients, project_name=project_name, keywords_label=kw_label)

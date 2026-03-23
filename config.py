@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     # ── 排程 ──────────────────────────────────────────────────────────────────
     schedule_hour: int = 9
     schedule_minute: int = 0
+    schedule_interval: int = 1   # 每幾天執行一次（1 = 每天）
 
     # ── 資料庫 ────────────────────────────────────────────────────────────────
     db_path: str = "tenders.db"

@@ -1,0 +1,332 @@
+{% extends "base.html" %}
+{% block page_title %}{{ project.name }} – 標案通知系統{% endblock %}
+
+{% block page %}
+<div x-data="projectDetail()" x-init="init()" class="flex-1 flex flex-col min-h-screen">
+
+  <!-- Top bar -->
+  <header class="bg-white border-b border-gray-200 px-8 py-4 flex items-center justify-between sticky top-0 z-10">
+    <div class="flex items-center gap-3">
+      <a href="/" class="text-gray-400 hover:text-gray-600 transition-colors">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+        </svg>
+      </a>
+      <h1 class="text-lg font-semibold text-gray-900">{{ project.name }}</h1>
+      <span class="text-xs px-2 py-0.5 rounded-full {{ 'bg-green-100 text-green-700' if project.active else 'bg-gray-100 text-gray-500' }}">
+        {{ '啟用' if project.active else '停用' }}
+      </span>
+    </div>
+    <div class="flex items-center gap-3">
+      {% if project.sheet_id %}
+      <a href="https://docs.google.com/spreadsheets/d/{{ project.sheet_id }}" target="_blank"
+         class="flex items-center gap-2 text-sm text-gray-600 border border-gray-300 rounded-lg px-4 py-2 hover:bg-gray-50 transition-colors">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+        </svg>
+        開啟試算表
+      </a>
+      {% endif %}
+      <a href="/projects/{{ project.id }}/edit"
+         class="flex items-center gap-2 text-sm text-gray-600 border border-gray-300 rounded-lg px-4 py-2 hover:bg-gray-50 transition-colors">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+        </svg>
+        編輯
+      </a>
+      <button @click="runNow()" :disabled="running"
+        class="flex items-center gap-2 text-sm bg-brand-600 text-white rounded-lg px-4 py-2 hover:bg-brand-700 transition-colors disabled:opacity-60">
+        <svg x-show="!running" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        <svg x-show="running" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+        </svg>
+        <span x-text="running ? '執行中…' : '立即執行'"></span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Content -->
+  <main class="flex-1 px-8 py-6">
+
+    <!-- Info bar -->
+    <div class="flex flex-wrap gap-4 mb-6 text-xs text-gray-500">
+      <span>
+        關鍵字：
+        {% for kw in project.keywords.split(',') if kw.strip() %}
+        <span class="inline-block bg-brand-50 text-brand-700 border border-brand-200 rounded px-1.5 py-0.5 mr-1">{{ kw.strip() }}</span>
+        {% endfor %}
+      </span>
+      <span>回溯 {{ project.notify_days }} 天</span>
+      <span>
+        排程：
+        {% if project.schedule_interval <= 1 %}每天{% else %}每 {{ project.schedule_interval }} 天{% endif %}
+        {{ '%02d:%02d' % (project.schedule_hour, project.schedule_minute) }}
+      </span>
+    </div>
+
+    <!-- Stats -->
+    <div class="grid grid-cols-3 gap-4 mb-6">
+      <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4 text-center">
+        <p class="text-2xl font-bold text-gray-900" x-text="stats.total ?? '…'"></p>
+        <p class="text-xs text-gray-400 mt-1">累計標案</p>
+      </div>
+      <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4 text-center">
+        <p class="text-2xl font-bold text-gray-900" x-text="stats.today ?? '…'"></p>
+        <p class="text-xs text-gray-400 mt-1">今日新增</p>
+      </div>
+      <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-4 text-center">
+        <p class="text-2xl font-bold text-gray-900" x-text="stats.unnotified ?? '…'"></p>
+        <p class="text-xs text-gray-400 mt-1">未通知</p>
+      </div>
+    </div>
+
+    <!-- Tenders table -->
+    <div class="bg-white rounded-xl shadow-sm border border-gray-100">
+      <div class="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <h2 class="font-semibold text-gray-900">標案清單</h2>
+          <span class="text-xs text-gray-400 bg-gray-100 rounded-full px-2.5 py-0.5"
+                x-text="total + ' 筆'"></span>
+        </div>
+        <select x-model="filterKw" @change="loadTenders(1)"
+          class="text-sm border border-gray-200 rounded-lg px-3 py-1.5 text-gray-700 focus:outline-none focus:ring-2 focus:ring-brand-500">
+          <option value="">全部關鍵字</option>
+          {% for kw in project.keywords.split(',') if kw.strip() %}
+          <option value="{{ kw.strip() }}">{{ kw.strip() }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <!-- Skeleton -->
+      <div x-show="loading" class="p-8 space-y-4">
+        <template x-for="i in 5" :key="i">
+          <div class="flex gap-4 animate-pulse">
+            <div class="h-3 bg-gray-100 rounded w-12"></div>
+            <div class="h-3 bg-gray-100 rounded flex-1"></div>
+            <div class="h-3 bg-gray-100 rounded w-28"></div>
+            <div class="h-3 bg-gray-100 rounded w-20"></div>
+          </div>
+        </template>
+      </div>
+
+      <!-- Empty -->
+      <div x-show="!loading && items.length === 0" class="py-16 text-center">
+        <p class="text-sm text-gray-400">尚無資料，請點「立即執行」開始抓取</p>
+      </div>
+
+      <!-- Table -->
+      <div x-show="!loading && items.length > 0" class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b border-gray-100 text-left">
+              <th class="px-6 py-3 text-xs font-medium text-gray-500 uppercase cursor-pointer select-none hover:text-gray-700"
+                  @click="sortBy('keywords')">
+                <span class="flex items-center gap-1">關鍵字 <span x-text="sortIcon('keywords')" class="text-brand-500"></span></span>
+              </th>
+              <th class="px-4 py-3 text-xs font-medium text-gray-500 uppercase cursor-pointer select-none hover:text-gray-700"
+                  @click="sortBy('name')">
+                <span class="flex items-center gap-1">標案名稱 <span x-text="sortIcon('name')" class="text-brand-500"></span></span>
+              </th>
+              <th class="px-4 py-3 text-xs font-medium text-gray-500 uppercase cursor-pointer select-none hover:text-gray-700"
+                  @click="sortBy('org_name')">
+                <span class="flex items-center gap-1">機關名稱 <span x-text="sortIcon('org_name')" class="text-brand-500"></span></span>
+              </th>
+              <th class="px-4 py-3 text-xs font-medium text-gray-500 uppercase cursor-pointer select-none hover:text-gray-700"
+                  @click="sortBy('budget')">
+                <span class="flex items-center gap-1">預算金額 <span x-text="sortIcon('budget')" class="text-brand-500"></span></span>
+              </th>
+              <th class="px-4 py-3 text-xs font-medium text-gray-500 uppercase cursor-pointer select-none hover:text-gray-700"
+                  @click="sortBy('notice_date')">
+                <span class="flex items-center gap-1">公告日 <span x-text="sortIcon('notice_date')" class="text-brand-500"></span></span>
+              </th>
+              <th class="px-4 py-3 text-xs font-medium text-gray-500 uppercase cursor-pointer select-none hover:text-gray-700"
+                  @click="sortBy('deadline')">
+                <span class="flex items-center gap-1">截止投標 <span x-text="sortIcon('deadline')" class="text-brand-500"></span></span>
+              </th>
+              <th class="px-4 py-3 text-xs font-medium text-gray-500 uppercase cursor-pointer select-none hover:text-gray-700"
+                  @click="sortBy('created_at')">
+                <span class="flex items-center gap-1">取得時間 <span x-text="sortIcon('created_at')" class="text-brand-500"></span></span>
+              </th>
+              <th class="px-4 py-3"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="t in items" :key="t.pk">
+              <tr class="border-b border-gray-50 hover:bg-gray-50 transition-colors">
+                <td class="px-6 py-3">
+                  <span class="text-xs bg-brand-50 text-brand-700 border border-brand-200 rounded-full px-2.5 py-0.5 whitespace-nowrap"
+                        x-text="t.keywords"></span>
+                </td>
+                <td class="px-4 py-3 max-w-xs">
+                  <p class="font-medium text-gray-900 truncate" :title="t.name" x-text="t.name || '—'"></p>
+                  <p class="text-xs text-gray-400 mt-0.5" x-text="t.case_no || ''"></p>
+                </td>
+                <td class="px-4 py-3 text-gray-600 text-xs max-w-[140px] truncate" :title="t.org_name" x-text="t.org_name || '—'"></td>
+                <td class="px-4 py-3 text-gray-700 whitespace-nowrap text-xs font-medium" x-text="t.budget || '—'"></td>
+                <td class="px-4 py-3 text-gray-500 whitespace-nowrap text-xs" x-text="t.notice_date || '—'"></td>
+                <td class="px-4 py-3 whitespace-nowrap text-xs">
+                  <span :class="isExpired(t.deadline) ? 'text-red-400 line-through' : 'text-gray-700'"
+                        x-text="t.deadline || '—'"></span>
+                </td>
+                <td class="px-4 py-3 text-gray-400 whitespace-nowrap text-xs" x-text="fmtCreatedAt(t.created_at)"></td>
+                <td class="px-4 py-3 text-right">
+                  <div class="flex items-center justify-end gap-2">
+                    <button x-show="t.detail_pending" @click="fetchDetail(t)"
+                      :disabled="t._fetching"
+                      class="text-xs text-amber-600 hover:text-amber-800 border border-amber-300 rounded px-2 py-0.5 hover:bg-amber-50 transition-colors disabled:opacity-50 whitespace-nowrap"
+                      title="openfun.app 尚未更新，點此補抓完整資料">
+                      <span x-show="!t._fetching">⬇ 補資料</span>
+                      <span x-show="t._fetching">補抓中…</span>
+                    </button>
+                    <a :href="t.detail_url" target="_blank" x-show="t.detail_url"
+                       class="text-xs text-brand-600 hover:text-brand-800 hover:underline whitespace-nowrap">查看 →</a>
+                  </div>
+                </td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Pagination -->
+      <div x-show="!loading && total > perPage"
+           class="px-6 py-4 border-t border-gray-100 flex items-center justify-between">
+        <p class="text-xs text-gray-500">
+          顯示 <span x-text="(page-1)*perPage+1"></span>–<span x-text="Math.min(page*perPage,total)"></span>
+          ／共 <span x-text="total"></span> 筆
+        </p>
+        <div class="flex gap-2">
+          <button @click="loadTenders(page-1)" :disabled="page<=1"
+            class="text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">← 上一頁</button>
+          <button @click="loadTenders(page+1)" :disabled="page*perPage>=total"
+            class="text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">下一頁 →</button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const PROJECT_ID = {{ project.id }};
+
+function projectDetail() {
+  return {
+    stats: {}, items: [], total: 0,
+    page: 1, perPage: 50, loading: true,
+    filterKw: '', running: false,
+    sortCol: 'notice_date', sortDir: 'desc',
+
+    async init() {
+      await Promise.all([this.loadStats(), this.loadTenders(1)]);
+    },
+
+    async loadStats() {
+      try {
+        const all = await apiCall('GET', '/api/projects');
+        const p = all.find(p => p.id === PROJECT_ID);
+        if (p) this.stats = { total: p.total, today: p.today, unnotified: p.unnotified };
+      } catch(e) { console.error(e); }
+    },
+
+    async loadTenders(p) {
+      this.loading = true;
+      this.page = p;
+      try {
+        const params = new URLSearchParams({
+          page: p, per_page: this.perPage,
+          sort_by: this.sortCol, sort_dir: this.sortDir,
+        });
+        if (this.filterKw) params.set('keyword', this.filterKw);
+        const data = await apiCall('GET', `/api/projects/${PROJECT_ID}/tenders?${params}`);
+        this.items = data.items;
+        this.total = data.total;
+      } catch(e) {
+        toast('載入失敗：' + e.message, 'error');
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    sortBy(col) {
+      if (this.sortCol === col) {
+        this.sortDir = this.sortDir === 'asc' ? 'desc' : 'asc';
+      } else {
+        this.sortCol = col;
+        this.sortDir = 'desc';
+      }
+      this.loadTenders(1);
+    },
+
+    sortIcon(col) {
+      if (this.sortCol !== col) return '↕';
+      return this.sortDir === 'asc' ? '↑' : '↓';
+    },
+
+    async runNow() {
+      this.running = true;
+      try {
+        const res = await apiCall('POST', `/api/projects/${PROJECT_ID}/run`);
+        toast(res.message, 'success');
+        setTimeout(() => { this.loadStats(); this.loadTenders(1); }, 60000);
+      } catch(e) {
+        toast('執行失敗：' + e.message, 'error');
+      } finally {
+        setTimeout(() => { this.running = false; }, 5000);
+      }
+    },
+
+    async fetchDetail(t) {
+      t._fetching = true;
+      try {
+        const res = await apiCall('POST', `/api/tenders/${encodeURIComponent(t.pk)}/fetch-detail`);
+        if (res.ok) {
+          // 更新該列資料
+          const d = res.data;
+          if (d.budget)      t.budget      = d.budget;
+          if (d.deadline)    t.deadline    = d.deadline;
+          if (d.notice_date) t.notice_date = d.notice_date;
+          if (d.detail_url)  t.detail_url  = d.detail_url;
+          t.detail_pending = false;
+          toast('資料已補完！', 'success');
+        } else {
+          toast(res.message || 'openfun.app 尚未更新', 'error');
+        }
+      } catch(e) {
+        toast('補抓失敗：' + e.message, 'error');
+      } finally {
+        t._fetching = false;
+      }
+    },
+
+    isExpired(deadline) {
+      if (!deadline) return false;
+      const m = deadline.match(/^(\d+)\/(\d+)\/(\d+)/);
+      if (!m) return false;
+      return new Date(+m[1]+1911, +m[2]-1, +m[3]) < new Date();
+    },
+
+    fmtCreatedAt(s) {
+      if (!s) return '—';
+      // SQLite stores as "YYYY-MM-DD HH:MM:SS" or ISO
+      const d = new Date(s.replace(' ', 'T'));
+      if (isNaN(d)) return s;
+      const yy = d.getFullYear();
+      const mm = String(d.getMonth()+1).padStart(2,'0');
+      const dd = String(d.getDate()).padStart(2,'0');
+      const hh = String(d.getHours()).padStart(2,'0');
+      const mi = String(d.getMinutes()).padStart(2,'0');
+      return `${yy}/${mm}/${dd} ${hh}:${mi}`;
+    },
+  }
+}
+</script>
+{% endblock %}

@@ -1,0 +1,266 @@
+{% extends "base.html" %}
+{% block page_title %}{{ '編輯專案' if project else '新增專案' }} – 標案通知系統{% endblock %}
+
+{% block page %}
+<div x-data="projectForm()" x-init="init()" class="flex-1 flex flex-col min-h-screen">
+
+  <!-- Top bar -->
+  <header class="bg-white border-b border-gray-200 px-8 py-4 flex items-center justify-between sticky top-0 z-10">
+    <div class="flex items-center gap-3">
+      <a href="/" class="text-gray-400 hover:text-gray-600 transition-colors">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+        </svg>
+      </a>
+      <h1 class="text-lg font-semibold text-gray-900">
+        {{ '編輯專案' if project else '新增專案' }}
+      </h1>
+    </div>
+    <div class="flex items-center gap-3">
+      <a href="/" class="text-sm text-gray-500 hover:text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-50">
+        取消
+      </a>
+      <button @click="save()" :disabled="saving"
+        class="flex items-center gap-2 text-sm bg-brand-600 text-white rounded-lg px-4 py-2 hover:bg-brand-700 transition-colors disabled:opacity-60">
+        <svg x-show="saving" class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+        </svg>
+        <span x-text="saving ? '儲存中…' : '儲存專案'"></span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Content -->
+  <main class="flex-1 px-8 py-6 max-w-2xl">
+
+    <!-- Project name -->
+    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-5">
+      <h2 class="text-sm font-semibold text-gray-700 mb-4">基本設定</h2>
+
+      <div class="mb-4">
+        <label class="block text-xs font-medium text-gray-600 mb-1.5">專案名稱 <span class="text-red-500">*</span></label>
+        <input x-model="form.name" type="text" placeholder="例：電腦設備採購監控"
+          class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+      </div>
+
+      <!-- Keywords tag input -->
+      <div class="mb-4">
+        <label class="block text-xs font-medium text-gray-600 mb-1.5">關鍵字</label>
+        <p class="text-xs text-gray-400 mb-2">標案名稱包含任一關鍵字即納入通知，按 Enter 或逗號新增</p>
+        <div class="flex flex-wrap gap-1.5 p-2 border border-gray-200 rounded-lg min-h-[42px] cursor-text"
+             @click="$refs.kwInput.focus()">
+          <template x-for="(kw, i) in form.keywords_list" :key="i">
+            <span class="flex items-center gap-1 bg-brand-50 text-brand-700 border border-brand-200 rounded px-2 py-0.5 text-xs">
+              <span x-text="kw"></span>
+              <button @click.stop="removeKeyword(i)" class="hover:text-red-500 ml-0.5">×</button>
+            </span>
+          </template>
+          <input x-ref="kwInput" x-model="kwInput" type="text" placeholder="輸入關鍵字…"
+            @keydown.enter.prevent="addKeyword()"
+            @keydown.comma.prevent="addKeyword()"
+            @keydown.backspace="kwInput === '' && removeKeyword(form.keywords_list.length - 1)"
+            class="flex-1 min-w-[120px] outline-none text-sm py-0.5 px-1 bg-transparent">
+        </div>
+      </div>
+
+      <!-- Notify days -->
+      <div>
+        <label class="block text-xs font-medium text-gray-600 mb-1.5">回溯天數</label>
+        <p class="text-xs text-gray-400 mb-2">每次執行時，往前查詢幾天的標案（建議 3–7 天）</p>
+        <input x-model.number="form.notify_days" type="number" min="1" max="30"
+          class="w-24 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+        <span class="text-sm text-gray-500 ml-2">天</span>
+      </div>
+    </div>
+
+    <!-- Notifications -->
+    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-5">
+      <h2 class="text-sm font-semibold text-gray-700 mb-4">通知設定</h2>
+
+      <!-- Email recipients -->
+      <div class="mb-5">
+        <label class="block text-xs font-medium text-gray-600 mb-1.5">寄信給誰</label>
+        <p class="text-xs text-gray-400 mb-2">按 Enter 或逗號新增收件人</p>
+        <div class="flex flex-wrap gap-1.5 p-2 border border-gray-200 rounded-lg min-h-[42px] cursor-text"
+             @click="$refs.emailInput.focus()">
+          <template x-for="(em, i) in form.email_list" :key="i">
+            <span class="flex items-center gap-1 bg-green-50 text-green-700 border border-green-200 rounded px-2 py-0.5 text-xs">
+              <span x-text="em"></span>
+              <button @click.stop="removeEmail(i)" class="hover:text-red-500 ml-0.5">×</button>
+            </span>
+          </template>
+          <input x-ref="emailInput" x-model="emailInput" type="email" placeholder="example@gmail.com"
+            @keydown.enter.prevent="addEmail()"
+            @keydown.comma.prevent="addEmail()"
+            @keydown.backspace="emailInput === '' && removeEmail(form.email_list.length - 1)"
+            class="flex-1 min-w-[180px] outline-none text-sm py-0.5 px-1 bg-transparent">
+        </div>
+      </div>
+
+      <!-- Google Sheets -->
+      <div>
+        <label class="block text-xs font-medium text-gray-600 mb-1.5">Google 試算表連結</label>
+        <p class="text-xs text-gray-400 mb-2">貼入試算表 URL 或 ID，留空表示不寫入試算表</p>
+        <input x-model="form.sheet_url" type="text"
+          placeholder="https://docs.google.com/spreadsheets/d/..."
+          class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+        <a x-show="form.sheet_url" :href="form.sheet_url" target="_blank"
+           class="text-xs text-brand-600 hover:underline mt-1 inline-block">開啟試算表 →</a>
+      </div>
+    </div>
+
+    <!-- Schedule -->
+    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 mb-5">
+      <h2 class="text-sm font-semibold text-gray-700 mb-4">排程設定</h2>
+
+      <div class="grid grid-cols-3 gap-4 mb-4">
+        <div>
+          <label class="block text-xs font-medium text-gray-600 mb-1.5">執行間隔</label>
+          <div class="flex items-center gap-2">
+            <input x-model.number="form.schedule_interval" type="number" min="1" max="30"
+              class="w-20 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+            <span class="text-sm text-gray-500">天</span>
+          </div>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-gray-600 mb-1.5">執行時間</label>
+          <div class="flex items-center gap-2">
+            <input x-model.number="form.schedule_hour" type="number" min="0" max="23"
+              class="w-16 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+            <span class="text-gray-500 font-medium">:</span>
+            <input x-model.number="form.schedule_minute" type="number" min="0" max="59" step="5"
+              class="w-16 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+          </div>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-gray-600 mb-1.5">啟用</label>
+          <label class="flex items-center gap-2 mt-2 cursor-pointer">
+            <div class="relative">
+              <input x-model="form.active" type="checkbox" class="sr-only peer">
+              <div class="w-10 h-5 bg-gray-200 rounded-full peer peer-checked:bg-brand-600 transition-colors"></div>
+              <div class="absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform peer-checked:translate-x-5"></div>
+            </div>
+            <span class="text-sm text-gray-600" x-text="form.active ? '啟用' : '停用'"></span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Preview -->
+      <div class="mt-2 p-3 bg-gray-50 rounded-lg">
+        <p class="text-xs text-gray-500">
+          排程預覽：
+          <span class="font-medium text-gray-700" x-text="schedulePreview()"></span>
+        </p>
+      </div>
+    </div>
+
+  </main>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function projectForm() {
+  const existing = {{ project | tojson if project else 'null' }};
+
+  return {
+    saving: false,
+    kwInput: '',
+    emailInput: '',
+    form: {
+      name: '',
+      keywords_list: [],
+      email_list: [],
+      sheet_url: '',
+      notify_days: 3,
+      schedule_interval: 1,
+      schedule_hour: 9,
+      schedule_minute: 0,
+      active: true,
+    },
+
+    init() {
+      if (existing) {
+        this.form.name              = existing.name || '';
+        this.form.keywords_list     = (existing.keywords || '').split(',').map(s=>s.trim()).filter(Boolean);
+        this.form.email_list        = (existing.email_to || '').split(',').map(s=>s.trim()).filter(Boolean);
+        this.form.sheet_url         = existing.sheet_id
+          ? `https://docs.google.com/spreadsheets/d/${existing.sheet_id}`
+          : '';
+        this.form.notify_days       = existing.notify_days       || 3;
+        this.form.schedule_interval = existing.schedule_interval || 1;
+        this.form.schedule_hour     = existing.schedule_hour     ?? 9;
+        this.form.schedule_minute   = existing.schedule_minute   ?? 0;
+        this.form.active            = existing.active !== 0;
+      }
+    },
+
+    addKeyword() {
+      const v = this.kwInput.trim().replace(/,$/, '');
+      if (v && !this.form.keywords_list.includes(v)) {
+        this.form.keywords_list.push(v);
+      }
+      this.kwInput = '';
+    },
+
+    removeKeyword(i) {
+      if (i >= 0) this.form.keywords_list.splice(i, 1);
+    },
+
+    addEmail() {
+      const v = this.emailInput.trim().replace(/,$/, '');
+      if (v && !this.form.email_list.includes(v)) {
+        this.form.email_list.push(v);
+      }
+      this.emailInput = '';
+    },
+
+    removeEmail(i) {
+      if (i >= 0) this.form.email_list.splice(i, 1);
+    },
+
+    schedulePreview() {
+      const h = String(this.form.schedule_hour   || 0).padStart(2, '0');
+      const m = String(this.form.schedule_minute || 0).padStart(2, '0');
+      const n = this.form.schedule_interval || 1;
+      return n <= 1 ? `每天 ${h}:${m}` : `每 ${n} 天 ${h}:${m}`;
+    },
+
+    async save() {
+      if (!this.form.name.trim()) {
+        toast('請輸入專案名稱', 'error');
+        return;
+      }
+      this.saving = true;
+      try {
+        const payload = {
+          name:              this.form.name.trim(),
+          keywords:          this.form.keywords_list.join(','),
+          email_to:          this.form.email_list.join(','),
+          sheet_url:         this.form.sheet_url,
+          notify_days:       this.form.notify_days,
+          schedule_interval: this.form.schedule_interval,
+          schedule_hour:     this.form.schedule_hour,
+          schedule_minute:   this.form.schedule_minute,
+          active:            this.form.active ? 1 : 0,
+        };
+
+        if (existing) {
+          await apiCall('PUT', `/api/projects/${existing.id}`, payload);
+          toast('專案已更新', 'success');
+        } else {
+          const res = await apiCall('POST', '/api/projects', payload);
+          toast('專案已建立', 'success');
+        }
+        setTimeout(() => { window.location.href = '/'; }, 800);
+      } catch(e) {
+        toast('儲存失敗：' + e.message, 'error');
+      } finally {
+        this.saving = false;
+      }
+    },
+  };
+}
+</script>
+{% endblock %}
